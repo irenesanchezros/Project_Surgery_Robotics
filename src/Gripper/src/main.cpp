@@ -5,7 +5,7 @@
 #include <ArduinoJson.h> // Compatible amb versió 7.4.2
 
 // Device ID
-const char *deviceId = "G5_Gri";
+const char *deviceId = "G1_Gri";
 
 // Wi-Fi credentials
 const char *ssid = "Robotics_UB";
@@ -21,8 +21,8 @@ int s1Status = HIGH;
 int s2Status = HIGH;
 
 // UDP settings
-IPAddress receiverESP32IP(192, 168, 1, 53); // IP of receiver ESP32
-IPAddress receiverComputerIP(192, 168, 1, 55); // IP of PC
+IPAddress receiverESP32IP(192, 168, 1, 13); // IP of receiver ESP32
+IPAddress receiverComputerIP(192, 168, 1, 15); // IP of PC
 const int udpPort = 12345;
 WiFiUDP udp;
 
