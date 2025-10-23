@@ -33,6 +33,11 @@ IMU imu;
 // Orientation data
 float Gri_roll = 0.0, Gri_pitch = 0.0, Gri_yaw = 0.0;
 
+// Torque data
+float Torque_roll1 = 0.0;
+float Torque_pitch = 0.0;
+float Torque_yaw = 0.0;
+
 void connectToWiFi() {
   Serial.print("Connecting to Wi-Fi");
   WiFi.begin(ssid, password);
@@ -81,10 +86,44 @@ void sendOrientationUDP() {
   udp.endPacket();
 }
 
+void receiveTorquesUDP() {
+    char buffer[255];
+    int packetSize = udp.parsePacket();
+    
+    if (packetSize) {
+        int len = udp.read(buffer, sizeof(buffer)-1);
+        if (len > 0) {
+            buffer[len] = 0;
+            JsonDocument doc;
+            DeserializationError error = deserializeJson(doc, buffer);
+            
+            if (!error) {
+                if (doc.containsKey("torque_roll1") && doc.containsKey("torque_pitch") && doc.containsKey("torque_yaw")) {
+                    Torque_roll1 = doc["torque_roll1"].as<float>();
+                    Torque_pitch = doc["torque_pitch"].as<float>();
+                    Torque_yaw = doc["torque_yaw"].as<float>();
+                    
+                    // Vibration motor control based on torque values
+                    float totalTorque = Torque_roll1 + Torque_pitch + Torque_yaw;
+                    // Convert torque to PWM value (0-255)
+                    int vibrationValue = constrain(totalTorque * 2.5, 0, 255); // Adjust the scaling factor as needed
+                    ledcWrite(0, vibrationValue); // Set the PWM value for the vibration motor
+                    Serial.print("Vibration motor value: ");
+                    Serial.println(vibrationValue);
+                }
+            }
+        }
+    }
+}
+
 void setup() {
   Serial.begin(115200);
   Wire.begin();
   delay(2000);
+
+  // Configure PWM for the vibration motor (channel 0)
+  ledcSetup(0, 5000, 8); // Channel 0, frequency 5kHz, resolution 8 bits
+  ledcAttachPin(vibrationPin, 0); // Attach the vibration motor to channel 0
 
  // Inicialitza IMU (amb DMP)
   imu.Install();
@@ -99,7 +138,8 @@ void setup() {
 }
 
 void loop() {
-  updateOrientation();
-  sendOrientationUDP();
-  delay(10);
+    receiveTorquesUDP();
+    updateOrientation();
+    sendOrientationUDP();
+    delay(10);
 }
