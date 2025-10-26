@@ -26,6 +26,36 @@ Gripper_rpy = None
 Servo_torques = None
 data_lock = threading.Lock()# semaphor to manage data from 2 threads
 
+#début de l'ajout
+Servo_torques = None  
+def parse_and_store_torques(received_data):
+   
+    global Servo_torques
+    
+    for k in ("torques", "servo_torques", "torque_values", "torque", "s_torques"):
+        if k in received_data:
+            Servo_torques = received_data.get(k)
+            return
+    for k in ("torque", "current_torque", "torque_value"):
+        if k in received_data:
+            Servo_torques = [received_data.get(k)]
+            return
+    
+    return
+
+def torque_level_color(max_torque):
+    
+    try:
+        t = float(max_torque)
+    except Exception:
+        return "grey"  # uknown
+    if t < 2.0:
+        return "green"
+    if t < 5.0:
+        return "yellow"
+    return "red"
+#fin de l'ajout
+
 # Robot Constants setup
 ROBOT_IP = '192.168.1.5'
 ROBOT_PORT = 30002 # Default port for UR robots
@@ -84,7 +114,40 @@ def endowrist2base_orientation(roll, pitch, yaw):
 def update_text_label(label, tool_orientation, gripper_orientation, status_message, torque_values):
     full_text = f"Tool orientation: {tool_orientation}\nGripper orientation: {gripper_orientation}\n{status_message}\nTorque Values: {torque_values}"
     label.after(0, lambda: label.config(text=full_text))
-
+    # update torque button (if present)
+    try:
+        tb = globals().get('torque_button', None)
+        if tb:
+            # torque_values peut être None, list, ou string
+            display_text = "Torque: --"
+            max_t = None
+            if isinstance(torque_values, (list, tuple)):
+                display_text = "Torque: " + ", ".join([str(round(float(x),2)) for x in torque_values])
+                try:
+                    max_t = max([abs(float(x)) for x in torque_values])
+                except Exception:
+                    max_t = None
+            else:
+                # try to parse single numeric
+                try:
+                    val = float(torque_values)
+                    display_text = f"Torque: {round(val,2)}"
+                    max_t = abs(val)
+                except Exception:
+                    if torque_values is not None:
+                        display_text = f"Torque: {torque_values}"
+            # schedule UI update on main thread
+            def _upd():
+                tb.config(text=display_text)
+                color = torque_level_color(max_t) if max_t is not None else "grey"
+                # macOS sometimes needs 'highlightbackground' for BG color; we'll set both
+                try:
+                    tb.config(bg=color, activebackground=color, highlightbackground=color)
+                except Exception:
+                    tb.config(bg=color)
+            tb.after(0, _upd)
+    except Exception:
+        pass
 def send_ur_script(command):
     robot_socket.send(("{}\n".format(command)).encode())
     
@@ -103,6 +166,7 @@ def read_data_UDP():
             data, addr = sock.recvfrom(BUFFER_SIZE) 
             try:
                 received_data = json.loads(data.decode())
+                parse_and_store_torques(received_data)
                 device_id = received_data.get("device")
                 if device_id == "G5_Endo":
                     with data_lock:
@@ -199,9 +263,27 @@ def move_robot(robot, gripper, needle, text_label):
                 status_message = "🔵 S1 no premut: agulla agafada"
                 
         # Update the label with the latest values
+        # --- get torque snapshot thread-safe ---
+        with data_lock:
+            torque_snapshot = None
+            if Servo_torques is not None:
+                # make a copy to avoid race conditions
+                try:
+                    if isinstance(Servo_torques, (list, tuple)):
+                        torque_snapshot = list(Servo_torques)
+                    else:
+                        torque_snapshot = Servo_torques
+                except Exception:
+                    torque_snapshot = Servo_torques
+        servo_torques_msg = torque_snapshot
+        #---end torque snapshot---
+        
+
         update_text_label(text_label, endowrist_orientation_msg, gripper_orientation_msg, status_message, servo_torques_msg)
 
         time.sleep(READ_INTERVAL_S)# define the reading interval
+
+
 
 def on_closing():
     global root, sock
@@ -237,6 +319,14 @@ def main():
     root.protocol("WM_DELETE_WINDOW", on_closing) # Proper clossing
     text_label = tk.Label(root, text="", wraplength=300)
     text_label.pack(padx=20, pady=20)
+
+    # Torque indicator button (numeric + color)
+    torque_button = tk.Button(root, text="Torque: --", width=22)
+    torque_button.pack(pady=6)
+
+# expose en global pour que d'autres fonctions puissent l'updater
+    globals()['torque_button'] = torque_button
+
 
     # Add sliders for ZERO_YAW_TOOL and ZERO_YAW_GRIPPER
     tool_yaw_slider = tk.Scale(root, from_=-180, to=180, orient=tk.HORIZONTAL, label="Tool Yaw",
