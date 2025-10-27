@@ -11,6 +11,7 @@ import os
 # Define the relative and absolute path to the RoboDK project file
 relative_path = "src/roboDK/SurgeryRobotics.rdk"
 absolute_path = os.path.abspath(relative_path)
+
 # Constants
 UDP_IP = "0.0.0.0"
 UDP_PORT = 12345
@@ -23,13 +24,15 @@ READ_INTERVAL_S = 0.01
 Endowrist_rpy = None
 Gripper_rpy = None
 Servo_torques = None
-data_lock = threading.Lock()# semaphor to manage data from 2 threads
+data_lock = threading.Lock()  # semaphore to manage data from 2 threads
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind((UDP_IP, UDP_PORT))
-#print(f"Listening on {UDP_IP}:{UDP_PORT}")
+# print(f"Listening on {UDP_IP}:{UDP_PORT}")
 
+# ------------------------------
 # Initialize RoboDK
+# ------------------------------
 def initialize_robodk(absolute_path):
     RDK = Robolink()
     time.sleep(2)  # wait for RoboDK to be ready
@@ -52,24 +55,35 @@ def initialize_robodk(absolute_path):
     robot.MoveL(Init_target)
     return RDK, robot, base, gripper, needle
 
+# ------------------------------
 # Transformation Endowrist to base
+# ------------------------------
 def endowrist2base_orientation(roll, pitch, yaw):
     roll2 = (roll + 90) % 360
     pitch2 = pitch % 360
     yaw2 = yaw % 360
     return roll2, pitch2, yaw2
 
-# Function to update the label with text
+# ------------------------------
+# Function to update the label
+# ------------------------------
 def update_text_label(label, tool_orientation, gripper_orientation, status_message, torque_values):
-    full_text = f"Tool orientation: {tool_orientation}\nGripper orientation: {gripper_orientation}\n{status_message}\nTorque Values: {torque_values}"
+    full_text = (
+        f"Tool orientation: {tool_orientation}\n"
+        f"Gripper orientation: {gripper_orientation}\n"
+        f"{status_message}\n"
+        f"Torque Values: {torque_values}"
+    )
     label.after(0, lambda: label.config(text=full_text))
 
-# Function to read UDP data and update the global variable
+# ------------------------------
+# Read UDP data
+# ------------------------------
 def read_data_UDP():
-    global Endowrist_rpy, Gripper_rpy, data_lock
+    global Endowrist_rpy, Gripper_rpy, data_lock, Servo_torques
     while True:
         try:
-            data, addr = sock.recvfrom(BUFFER_SIZE) 
+            data, addr = sock.recvfrom(BUFFER_SIZE)
             try:
                 received_data = json.loads(data.decode())
                 device_id = received_data.get("device")
@@ -79,105 +93,148 @@ def read_data_UDP():
                 elif device_id == "G1_Gri":
                     with data_lock:
                         Gripper_rpy = received_data
+                elif device_id == "G1_Servo":
+                    with data_lock:
+                        Servo_torques = received_data
             except json.JSONDecodeError:
                 print("Error decoding JSON data")
-        except socket.error as e:
-            #print(f"Socket error in UDP reader: {e}")
+        except socket.error:
             sock.close()
             print("Socket closed.")
             break
 
-# Function to process the latest UDP data and move the robot
+# ------------------------------
+# Move robot based on data
+# ------------------------------
 def move_robot(robot, gripper, needle, text_label):
-    global ZERO_YAW_TOOL, ZERO_YAW_GRIPPER, Endowrist_rpy, Gripper_rpy, data_lock
+    global ZERO_YAW_TOOL, ZERO_YAW_GRIPPER, Endowrist_rpy, Gripper_rpy, data_lock, Servo_torques
     global e_roll, e_pitch, e_yaw, g_roll, g_pitch, g_yaw, s1, s2, s3, s4
-    
+
     endowrist_orientation_msg = ""
     gripper_orientation_msg = ""
     status_message = ""
     servo_torques_msg = ""
-    
+
     while True:
         with data_lock:
             current_Endowrist_rpy = Endowrist_rpy
             current_Gripper_rpy = Gripper_rpy
 
         if current_Endowrist_rpy:
-            e_roll = Endowrist_rpy.get("roll")
-            e_pitch = Endowrist_rpy.get("pitch")
-            e_yaw = Endowrist_rpy.get("yaw")
-            s3 = Endowrist_rpy.get("s3")
-            s4 = Endowrist_rpy.get("s4")
+            e_roll = current_Endowrist_rpy.get("roll")
+            e_pitch = current_Endowrist_rpy.get("pitch")
+            e_yaw = current_Endowrist_rpy.get("yaw")
+            s3 = current_Endowrist_rpy.get("s3")
+            s4 = current_Endowrist_rpy.get("s4")
+
             endo_roll, endo_pitch, endo_yaw = endowrist2base_orientation(e_roll, e_pitch, e_yaw)
-            #print(f"Endowrist: {endo_roll}, {endo_pitch}, {endo_yaw}")
-            # Move Endowrist
             endowrist_pose = robot.Pose()
             Xr, Yr, Zr, rr, pr, yr = Pose_2_TxyzRxyz(endowrist_pose)
-            endowrist_pose_new = transl(Xr, Yr, Zr) * rotz(math.radians(ZERO_YAW_TOOL)) * rotz(math.radians(endo_yaw)) * roty(math.radians(endo_pitch)) * rotx(math.radians(endo_roll))
+            endowrist_pose_new = (
+                transl(Xr, Yr, Zr)
+                * rotz(math.radians(ZERO_YAW_TOOL))
+                * rotz(math.radians(endo_yaw))
+                * roty(math.radians(endo_pitch))
+                * rotx(math.radians(endo_roll))
+            )
+
             if robot.MoveL_Test(robot.Joints(), endowrist_pose_new) == 0:
                 robot.MoveL(endowrist_pose_new, True)
-                endowrist_orientation_msg = f"R={round(endo_roll)} P={round(endo_pitch)} W={round((endo_yaw+ZERO_YAW_TOOL)%360)}"
+                endowrist_orientation_msg = (
+                    f"R={round(endo_roll)} P={round(endo_pitch)} "
+                    f"W={round((endo_yaw + ZERO_YAW_TOOL) % 360)}"
+                )
                 status_message = ""
             else:
-                endowrist_orientation_msg = f"R={round(endo_roll)} P={round(endo_pitch)} W={round((endo_yaw+ZERO_YAW_TOOL)%360)}"
+                endowrist_orientation_msg = (
+                    f"R={round(endo_roll)} P={round(endo_pitch)} "
+                    f"W={round((endo_yaw + ZERO_YAW_TOOL) % 360)}"
+                )
                 status_message = "Robot cannot reach the position"
-                
+
             if s3 == 0 or s4 == 0:
                 current_pose = robot.Pose()
-                # Z movement based on S3 and S4 buttons
                 Tz = transl(0, 0, 5) if s3 == 0 else transl(0, 0, -5)
-                new_pose = current_pose * Tz  # translació relativa
-
-                status_message = "⬆ Botó S3 premut: pujant" if s3 == 0 else "⬇ Botó S4 premut: baixant"
-
+                new_pose = current_pose * Tz
+                status_message = (
+                    "⬆ Botó S3 premut: pujant" if s3 == 0 else "⬇ Botó S4 premut: baixant"
+                )
                 if robot.MoveL_Test(robot.Joints(), new_pose) == 0:
                     robot.MoveL(new_pose, True)
                 else:
                     status_message = "❌ No es pot moure més en Z (relatiu)"
-                    
+
         if current_Gripper_rpy:
-            g_roll = Gripper_rpy.get("roll")
-            g_pitch = Gripper_rpy.get("pitch")
-            g_yaw = Gripper_rpy.get("yaw")
-            s1 = Gripper_rpy.get("s1")
-            s2 = Gripper_rpy.get("s2")
-            #print(f"Gripper: {g_roll}, {g_pitch}, {g_yaw}")
-            # Move Gripper
+            g_roll = current_Gripper_rpy.get("roll")
+            g_pitch = current_Gripper_rpy.get("pitch")
+            g_yaw = current_Gripper_rpy.get("yaw")
+            s1 = current_Gripper_rpy.get("s1")
+            s2 = current_Gripper_rpy.get("s2")
+
             gripper_pose = gripper.Pose()
             Xg, Yg, Zg, rg, pg, yg = Pose_2_TxyzRxyz(gripper_pose)
-            gripper_pose_new = transl(Xg, Yg, Zg) * rotz(math.radians(ZERO_YAW_GRIPPER)) * rotz(math.radians(g_yaw)) * roty(math.radians(g_pitch)) * rotx(math.radians(g_roll))
+            gripper_pose_new = (
+                transl(Xg, Yg, Zg)
+                * rotz(math.radians(ZERO_YAW_GRIPPER))
+                * rotz(math.radians(g_yaw))
+                * roty(math.radians(g_pitch))
+                * rotx(math.radians(g_roll))
+            )
             gripper.setPose(gripper_pose_new)
-            gripper_orientation_msg = f"R={round(g_roll)} P={round(g_pitch)} W={round((g_yaw+ZERO_YAW_GRIPPER)%360)}"     
+            gripper_orientation_msg = (
+                f"R={round(g_roll)} P={round(g_pitch)} "
+                f"W={round((g_yaw + ZERO_YAW_GRIPPER) % 360)}"
+            )
+
             if s1 == 0:
-                #Obre la pinça → deixa anar l’agulla
                 needle.setParentStatic(base)
                 status_message = "🟢 S1 premut: agulla alliberada"
-
             elif s1 == 1:
-                #Tanca la pinça → agafa l’agulla
                 needle.setParent(gripper)
                 needle.setPose(TxyzRxyz_2_Pose([0, 0, 0, 0, 0, 0]))
                 status_message = "🔵 S1 no premut: agulla agafada"
-                     
-        # Update the label with the latest values
-        update_text_label(text_label, endowrist_orientation_msg, gripper_orientation_msg, status_message, servo_torques_msg)
 
-        time.sleep(READ_INTERVAL_S)# define the reading interval
+        if Servo_torques:
+            t1 = Servo_torques.get("Torque_Roll_1", 0)
+            t2 = Servo_torques.get("Torque_Roll_2", 0)
+            tp = Servo_torques.get("Torque_Pitch", 0)
+            ty = Servo_torques.get("Torque_Yaw", 0)
+            servo_torques_msg = f"Torque R1={t1:.2f}, R2={t2:.2f}, P={tp:.2f}, Y={ty:.2f}"
 
+            total_torque = abs(t1) + abs(t2) + abs(tp) + abs(ty)
+            if total_torque < 0.5:
+                color = "green"
+            elif total_torque < 1.0:
+                color = "yellow"
+            else:
+                color = "red"
+            text_label.after(0, lambda c=color: text_label.config(bg=c))
+
+        update_text_label(
+            text_label,
+            endowrist_orientation_msg,
+            gripper_orientation_msg,
+            status_message,
+            servo_torques_msg,
+        )
+        time.sleep(READ_INTERVAL_S)
+
+# ------------------------------
+# Close function
+# ------------------------------
 def on_closing():
     global root, sock
     print("Closing...")
     try:
         sock.close()
         print("Ending Socket")
-        #initialize_robodk()
-        #print("Program INITIALIZED")
-    except Exception as e:
-        #print(f"Error al tancar el socket: {e}")
+    except Exception:
         pass
     root.destroy()
 
-# Update functions for sliders
+# ------------------------------
+# Slider callbacks
+# ------------------------------
 def set_zero_yaw_tool(value):
     global ZERO_YAW_TOOL
     ZERO_YAW_TOOL = float(value)
@@ -186,35 +243,37 @@ def set_zero_yaw_gripper(value):
     global ZERO_YAW_GRIPPER
     ZERO_YAW_GRIPPER = float(value)
 
+# ------------------------------
 # Main function
+# ------------------------------
 def main():
     global root, ZERO_YAW_TOOL, ZERO_YAW_GRIPPER, robot, gripper, base, text_label, absolute_path
-    
     RDK, robot, base, gripper, needle = initialize_robodk(absolute_path)
 
     root = tk.Tk()
     root.title("Suture Process")
-    root.protocol("WM_DELETE_WINDOW", on_closing) # Proper clossing
+    root.protocol("WM_DELETE_WINDOW", on_closing)
     text_label = tk.Label(root, text="", wraplength=300)
     text_label.pack(padx=20, pady=20)
 
-    # Add sliders for ZERO_YAW_TOOL and ZERO_YAW_GRIPPER
-    tool_yaw_slider = tk.Scale(root, from_=-180, to=180, orient=tk.HORIZONTAL, label="Tool Yaw",
-                                    command=lambda value: set_zero_yaw_tool(float(value)), length=200)
+    tool_yaw_slider = tk.Scale(
+        root, from_=-180, to=180, orient=tk.HORIZONTAL, label="Tool Yaw",
+        command=lambda value: set_zero_yaw_tool(float(value)), length=200
+    )
     tool_yaw_slider.set(ZERO_YAW_TOOL)
     tool_yaw_slider.pack()
 
-    gripper_yaw_slider = tk.Scale(root, from_=-180, to=180, orient=tk.HORIZONTAL, label="Gripper Yaw",
-                                        command=lambda value: set_zero_yaw_gripper(float(value)), length=200)
+    gripper_yaw_slider = tk.Scale(
+        root, from_=-180, to=180, orient=tk.HORIZONTAL, label="Gripper Yaw",
+        command=lambda value: set_zero_yaw_gripper(float(value)), length=200
+    )
     gripper_yaw_slider.set(ZERO_YAW_GRIPPER)
     gripper_yaw_slider.pack()
 
-    # Start the UDP reading thread
     udp_thread = threading.Thread(target=read_data_UDP)
     udp_thread.daemon = True
     udp_thread.start()
 
-    # Start the robot movement thread
     robot_thread = threading.Thread(target=move_robot, args=(robot, gripper, needle, text_label))
     robot_thread.daemon = True
     robot_thread.start()
