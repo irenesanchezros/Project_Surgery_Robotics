@@ -3,7 +3,7 @@
 #include "MPU9250.h"
 #include <Wire.h> // Needed for I2C to read IMU
 #include <ArduinoJson.h> // Compatible amb versió 7.4.2
-#include <IMU_RoboticsUB.h>
+#include <IMU_RoboticsUB.h> // Custom IMU library
 
 // Device ID
 const char *deviceId = "G1_Gri";
