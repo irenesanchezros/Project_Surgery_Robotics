@@ -91,12 +91,8 @@ void receiveTorquesUDP() {
     int packetSize = udp.parsePacket();
 
     if (!packetSize) {
-        // No packet arrived
         return;
     }
-
-    Serial.print("UDP packet size: ");
-    Serial.println(packetSize);
 
     int len = udp.read(buffer, sizeof(buffer) - 1);
     if (len <= 0) {
@@ -104,10 +100,7 @@ void receiveTorquesUDP() {
         return;
     }
     buffer[len] = '\0';
-    Serial.print("Received UDP JSON: ");
-    Serial.println(buffer);
 
-    // Use a DynamicJsonDocument with a capacity estimate
     DynamicJsonDocument doc(512);
     DeserializationError error = deserializeJson(doc, buffer);
 
@@ -117,34 +110,26 @@ void receiveTorquesUDP() {
         return;
     }
 
-    // Debug: list keys if needed
-    // for (JsonPair kv : doc.as<JsonObject>()) { Serial.println(kv.key().c_str()); }
+    // Verify sender device
+    if (doc.containsKey("device") && strcmp(doc["device"], "G1_Servos") == 0) {
+        // Get torque values with flexible key names
+        if (doc.containsKey("Torque_Roll_1")) Torque_roll1 = doc["Torque_Roll_1"].as<float>();
+        if (doc.containsKey("Torque_Pitch")) Torque_pitch = doc["Torque_Pitch"].as<float>();
+        if (doc.containsKey("Torque_Yaw")) Torque_yaw = doc["Torque_Yaw"].as<float>();
 
-    // Accept either signed or unsigned torque values; use absolute sum so negative values still produce vibration
-    if (doc.containsKey("torque_roll1") || doc.containsKey("torque_roll") || doc.containsKey("torque1")) {
-        // adapt to possible different key names
-        if (doc.containsKey("torque_roll1")) Torque_roll1 = doc["torque_roll1"].as<float>();
-        else if (doc.containsKey("torque_roll")) Torque_roll1 = doc["torque_roll"].as<float>();
-        else Torque_roll1 = doc["torque1"].as<float>();
+        // Vibration motor control based on absolute torque values
+        float totalTorque = fabs(Torque_roll1) + fabs(Torque_pitch) + fabs(Torque_yaw);
+        int vibrationValue = constrain((int)(totalTorque * 2.5f), 0, 255);
+        ledcWrite(0, vibrationValue);
+
+        // Debug output
+        Serial.print("Torques (Roll,Pitch,Yaw): ");
+        Serial.print(Torque_roll1, 2); Serial.print(", ");
+        Serial.print(Torque_pitch, 2); Serial.print(", ");
+        Serial.println(Torque_yaw, 2);
+        Serial.print("Vibration value: ");
+        Serial.println(vibrationValue);
     }
-    if (doc.containsKey("torque_pitch")) Torque_pitch = doc["torque_pitch"].as<float>();
-    if (doc.containsKey("torque_yaw")) Torque_yaw = doc["torque_yaw"].as<float>();
-
-    Serial.print("Torque_roll1: "); Serial.println(Torque_roll1);
-    Serial.print("Torque_pitch: "); Serial.println(Torque_pitch);
-    Serial.print("Torque_yaw: "); Serial.println(Torque_yaw);
-
-    // Vibration motor control based on absolute torque values
-    float totalTorque = fabs(Torque_roll1) + fabs(Torque_pitch) + fabs(Torque_yaw);
-
-    // Convert torque to PWM value (0-255)
-    int vibrationValue = constrain((int)(totalTorque * 2.5f), 0, 255); // adjust scale if needed
-
-    // Write PWM to channel 0 (configured in setup)
-    ledcWrite(0, vibrationValue);
-
-    Serial.print("Vibration motor value: ");
-    Serial.println(vibrationValue);
 }
 
 void setup() {
