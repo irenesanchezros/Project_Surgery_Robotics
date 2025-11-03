@@ -104,6 +104,7 @@ def move_robot(robot, gripper, needle, text_label):
         with data_lock:
             current_Endowrist_rpy = Endowrist_rpy
             current_Gripper_rpy = Gripper_rpy
+            current_Servo_torques = Servo_torques
 
         if current_Endowrist_rpy:
             e_roll = Endowrist_rpy.get("roll")

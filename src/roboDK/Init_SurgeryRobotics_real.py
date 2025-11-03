@@ -104,12 +104,15 @@ def read_data_UDP():
             try:
                 received_data = json.loads(data.decode())
                 device_id = received_data.get("device")
-                if device_id == "G5_Endo":
+                if device_id == "G1_Endo":
                     with data_lock:
                         Endowrist_rpy = received_data
-                elif device_id == "G5_Gri":
+                elif device_id == "G1_Gri":
                     with data_lock:
                         Gripper_rpy = received_data
+                elif device_id == "G1_Servo": 
+                    with data_lock:
+                        Servo_torques = received_data
             except json.JSONDecodeError:
                 print("Error decoding JSON data")
         except socket.error as e:
@@ -132,6 +135,7 @@ def move_robot(robot, gripper, needle, text_label):
         with data_lock:
             current_Endowrist_rpy = Endowrist_rpy
             current_Gripper_rpy = Gripper_rpy
+            current_Servo_torques = Servo_torques
 
         if current_Endowrist_rpy:
             e_roll = Endowrist_rpy.get("roll")
@@ -197,6 +201,25 @@ def move_robot(robot, gripper, needle, text_label):
                 needle.setParent(gripper)
                 needle.setPose(TxyzRxyz_2_Pose([0, 0, 0, 0, 0, 0]))
                 status_message = "🔵 S1 no premut: agulla agafada"
+
+        # Adding logic for servo torques 
+        if current_Servo_torques:
+            t1 = current_Servo_torques.get("Torque_Roll_1", 0)
+            t2 = current_Servo_torques.get("Torque_Roll_2", 0)
+            tp = current_Servo_torques.get("Torque_Pitch", 0)
+            ty = current_Servo_torques.get("Torque_Yaw", 0)
+            servo_torques_msg = f"Torque R1={t1:.2f}, R2={t2:.2f}, P={tp:.2f}, Y={ty:.2f}"
+
+            # Color
+            total_torque = abs(t1) + abs(t2) + abs(tp) + abs(ty)
+            if total_torque < 0.5:
+                color = "green"
+            elif total_torque < 1.0:
+                color = "yellow"
+            else:
+                color = "red"
+            text_label.after(0, lambda c=color: text_label.config(bg=c))
+        # End Servo torques logic
                 
         # Update the label with the latest values
         update_text_label(text_label, endowrist_orientation_msg, gripper_orientation_msg, status_message, servo_torques_msg)
